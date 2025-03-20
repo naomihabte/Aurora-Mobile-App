@@ -26,12 +26,21 @@ export default function TabLayout() {
         }),
       }}
     >
-      {/* Home Page (Previously Explore Page) */}
+      {/* Home Page */}
       <Tabs.Screen
-        name="home"
+        name="index"
         options={{
           title: "Home",
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+        }}
+      />
+
+      {/* History Tab  */}
+      <Tabs.Screen
+        name="explore"
+        options={{
+          title: "History",
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="clock.fill" color={color} />,
         }}
       />
     </Tabs>
