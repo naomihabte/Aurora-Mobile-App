@@ -1,30 +1,120 @@
 import React, { useState, useEffect } from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { database } from "../../firebaseConfig";
-import { ref, onValue } from "firebase/database";
+import { ref, get } from "firebase/database";
+import * as Notifications from "expo-notifications";
+
+let lastNotificationTime = 0; // Prevents duplicate notifications
+
+// Configure Notifications
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+  }),
+});
+
+// Request Permission for Notifications
+async function registerForPushNotifications() {
+  const { status } = await Notifications.getPermissionsAsync();
+  if (status !== "granted") {
+    const { status: newStatus } = await Notifications.requestPermissionsAsync();
+    if (newStatus !== "granted") {
+      console.log("Notification permission denied");
+      return;
+    }
+  }
+  const token = (await Notifications.getExpoPushTokenAsync()).data;
+  console.log("Expo Push Token:", token);
+}
 
 const HomeScreen = () => {
-  const [waterLevel, setWaterLevel] = useState("--");
+  const [latestConsumption, setLatestConsumption] = useState(null);
+  const [dailyTotal, setDailyTotal] = useState(0);
+  const dailyGoal = 2000; // Daily goal in mL
 
   useEffect(() => {
-    console.log(" Listening for Firebase changes...");
+    registerForPushNotifications();
 
-    const waterLevelRef = ref(database, "bottle/waterLevel");
+    console.log("Syncing data every 5 seconds...");
 
-    // Debugging logs
-    onValue(waterLevelRef, (snapshot) => {
+    const fetchLatestConsumption = async () => {
+      const bottleRef = ref(database, "bottle");
+      const snapshot = await get(bottleRef);
+
       if (snapshot.exists()) {
-        console.log("✅ Water Level Updated: ", snapshot.val());
-        setWaterLevel(snapshot.val());
+        const data = snapshot.val();
+        const entries = Object.values(data);
+        const latestEntry = entries[entries.length - 1];
+
+        console.log("Latest Consumption:", latestEntry);
+        setLatestConsumption(latestEntry);
+
+        calculateDailyTotal(entries);
+        checkLowWaterIntake(entries);
       } else {
         console.log("No data found in Firebase.");
       }
-    }, (error) => {
-      console.error("Firebase Read Error: ", error);
+    };
+
+    const interval = setInterval(() => {
+      fetchLatestConsumption();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Calculate total water intake for today
+  async function calculateDailyTotal(entries) {
+    const today = new Date().toDateString();
+    let total = 0;
+
+    entries.forEach(entry => {
+      if (entry.timestamp.includes(today)) {
+        total += entry.volume_drank;
+      }
     });
 
-    return () => {};
-  }, []);
+    setDailyTotal(total);
+  }
+
+  // Check low water intake in the past 3 hours
+  async function checkLowWaterIntake(entries) {
+    const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000;
+    let totalWater = 0;
+
+    entries.forEach(entry => {
+      const entryTime = new Date(entry.timestamp).getTime();
+      if (entryTime > threeHoursAgo) {
+        totalWater += entry.volume_drank;
+      }
+    });
+
+    if (totalWater < 500) {
+      sendLowWaterNotification();
+    }
+  }
+
+  // Prevent duplicate notifications
+  async function sendLowWaterNotification() {
+    const currentTime = Date.now();
+
+    if (currentTime - lastNotificationTime > 60 * 60 * 1000) { // Only notify every 1 hour
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: "Drink More Water!",
+          body: "You’ve had less than 500mL in the last 3 hours. Stay hydrated! 💧",
+        },
+        trigger: null,
+      });
+
+      console.log("Notification Sent: Drink More Water!");
+      lastNotificationTime = currentTime;
+    } else {
+      console.log("Skipping notification (already sent recently).");
+    }
+  }
 
   return (
     <View style={styles.container}>
@@ -33,9 +123,37 @@ const HomeScreen = () => {
         Aurora is a smart water bottle that helps you track your hydration in real-time.
         Stay hydrated and monitor your water consumption effortlessly!
       </Text>
+
+      {/* Hydration Goal Status */}
+      <View style={styles.goalContainer}>
+        <Text style={styles.sectionTitle}>Daily Hydration Status</Text>
+        <Text
+          style={[
+            styles.goalStatus,
+            { color: dailyTotal >= dailyGoal ? "green" : "red" }
+          ]}
+        >
+          {dailyTotal >= dailyGoal
+            ? "✅ Goal Reached!"
+            : "⚠️ Keep Drinking!"}
+        </Text>
+        <Text style={styles.trackingText}>{dailyTotal} mL / {dailyGoal} mL</Text>
+      </View>
+
+      {/* Add Spacing */}
+      <View style={styles.spacer} />
+
+      {/* Latest Water Consumption */}
       <Text style={styles.sectionTitle}>Live Tracking</Text>
       <View style={styles.trackingBox}>
-        <Text style={styles.trackingText}>Water Level: {waterLevel}%</Text>
+        {latestConsumption ? (
+          <>
+            <Text style={styles.trackingText}>Last Drink: {latestConsumption.volume_drank} mL</Text>
+            <Text style={styles.timestamp}>Time: {latestConsumption.timestamp}</Text>
+          </>
+        ) : (
+          <Text style={styles.trackingText}>Fetching data...</Text>
+        )}
       </View>
     </View>
   );
@@ -61,11 +179,28 @@ const styles = StyleSheet.create({
     color: "#6A5ACD",
     marginBottom: 20,
   },
+  goalContainer: {
+    alignItems: "center",
+    marginVertical: 20,
+    padding: 15,
+    backgroundColor: "#D8BFD8",
+    borderRadius: 10,
+    width: "80%",
+  },
   sectionTitle: {
     fontSize: 22,
     fontWeight: "bold",
     color: "#4B0082",
-    marginTop: 20,
+    marginBottom: 10,
+  },
+  goalStatus: {
+    fontSize: 20,
+    fontWeight: "bold",
+    marginTop: 5,
+  },
+  trackingText: {
+    fontSize: 18,
+    color: "#4B0082",
   },
   trackingBox: {
     backgroundColor: "#D8BFD8",
@@ -75,9 +210,13 @@ const styles = StyleSheet.create({
     width: "80%",
     alignItems: "center",
   },
-  trackingText: {
-    fontSize: 18,
-    color: "#4B0082",
+  timestamp: {
+    fontSize: 14,
+    color: "#6A5ACD",
+    marginTop: 5,
+  },
+  spacer: {
+    height: 40,
   },
 });
 
