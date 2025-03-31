@@ -3,6 +3,7 @@ import { View, Text, StyleSheet } from "react-native";
 import { database } from "../../firebaseConfig";
 import { ref, get } from "firebase/database";
 import * as Notifications from "expo-notifications";
+import { Platform } from "react-native";
 
 let lastNotificationTime = 0; // Prevents duplicate notifications
 
@@ -17,6 +18,11 @@ Notifications.setNotificationHandler({
 
 // Request Permission for Notifications
 async function registerForPushNotifications() {
+  if (Platform.OS === "web") {
+    console.log("🚫 Web push notifications are disabled.");
+    return;
+  }
+
   const { status } = await Notifications.getPermissionsAsync();
   if (status !== "granted") {
     const { status: newStatus } = await Notifications.requestPermissionsAsync();
@@ -25,6 +31,7 @@ async function registerForPushNotifications() {
       return;
     }
   }
+
   const token = (await Notifications.getExpoPushTokenAsync()).data;
   console.log("Expo Push Token:", token);
 }
@@ -32,7 +39,7 @@ async function registerForPushNotifications() {
 const HomeScreen = () => {
   const [latestConsumption, setLatestConsumption] = useState(null);
   const [dailyTotal, setDailyTotal] = useState(0);
-  const dailyGoal = 2000; // Daily goal in mL
+  const dailyGoal = 500; // Daily goal in mL
 
   useEffect(() => {
     registerForPushNotifications();
@@ -70,8 +77,9 @@ const HomeScreen = () => {
     const today = new Date().toDateString();
     let total = 0;
 
-    entries.forEach(entry => {
-      if (entry.timestamp.includes(today)) {
+    entries.forEach((entry) => {
+      const entryDate = new Date(entry.timestamp).toDateString();
+      if (entryDate === today) {
         total += entry.volume_drank;
       }
     });
@@ -98,21 +106,26 @@ const HomeScreen = () => {
 
   // Prevent duplicate notifications
   async function sendLowWaterNotification() {
+    if (Platform.OS === "web") {
+      console.log("🚫 Notifications not supported on web. Skipping.");
+      return;
+    }
+
     const currentTime = Date.now();
 
-    if (currentTime - lastNotificationTime > 60 * 60 * 1000) { // Only notify every 1 hour
+    if (currentTime - lastNotificationTime > 60 * 60 * 1000) {
       await Notifications.scheduleNotificationAsync({
         content: {
-          title: "Drink More Water!",
-          body: "You’ve had less than 500mL in the last 3 hours. Stay hydrated! 💧",
+          title: "🚰 Drink More Water!",
+          body: "You haven’t reached your daily hydration goal yet. Time to drink some water! 💧",
         },
         trigger: null,
       });
 
-      console.log("Notification Sent: Drink More Water!");
+      console.log("📢 Notification Sent!");
       lastNotificationTime = currentTime;
     } else {
-      console.log("Skipping notification (already sent recently).");
+      console.log("⏳ Skipping notification (already sent recently).");
     }
   }
 
@@ -130,14 +143,23 @@ const HomeScreen = () => {
         <Text
           style={[
             styles.goalStatus,
-            { color: dailyTotal >= dailyGoal ? "green" : "red" }
+            {
+              color:
+                dailyTotal >= 500
+                  ? "green"
+                  : dailyTotal >= 250
+                  ? "#1E90FF" // blue
+                  : "red",
+            },
           ]}
         >
-          {dailyTotal >= dailyGoal
+          {dailyTotal >= 500
             ? "✅ Goal Reached!"
+            : dailyTotal >= 250
+            ? "🔵 You're getting there, you've met half of your goal!"
             : "⚠️ Keep Drinking!"}
         </Text>
-        <Text style={styles.trackingText}>{dailyTotal} mL / {dailyGoal} mL</Text>
+        <Text style={styles.trackingText}>{dailyTotal.toFixed(2)} mL / 500 mL</Text>
       </View>
 
       {/* Add Spacing */}
